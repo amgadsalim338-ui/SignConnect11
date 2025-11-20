@@ -2,8 +2,11 @@ flask
 torch
 sentence-transformers
 librosa
+soundfile
 faiss-cpu
 numpy
 transformers
 scikit-learn
+pyttsx3
+tqdm
 
