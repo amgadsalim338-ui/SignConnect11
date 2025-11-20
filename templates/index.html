@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignConnect</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 0; }
+        .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+        h1 { text-align: center; margin-bottom: 10px; }
+        p.subtitle { text-align: center; margin-top: 0; color: #cbd5e1; }
+        form { background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+        .input-group { display: flex; align-items: center; gap: 12px; }
+        input[type="file"] { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0b1220; color: #e2e8f0; }
+        button { padding: 12px 18px; border: none; border-radius: 8px; background: linear-gradient(135deg, #22d3ee, #6366f1); color: #0b1220; font-weight: bold; cursor: pointer; transition: transform 0.1s ease-in-out; }
+        button:hover { transform: translateY(-1px); }
+        .result { margin-top: 30px; background: #0b1220; padding: 20px; border-radius: 12px; border: 1px solid #334155; }
+        video { width: 100%; border-radius: 12px; margin-top: 12px; }
+        .flash { color: #fbbf24; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SignConnect</h1>
+        <p class="subtitle">Upload an audio clip to find the closest sign-language video.</p>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash">{{ messages[0] }}</div>
+            {% endif %}
+        {% endwith %}
+        <form action="/upload" method="post" enctype="multipart/form-data">
+            <div class="input-group">
+                <input type="file" name="audio" accept="audio/*" required>
+                <button type="submit">Match Video</button>
+            </div>
+        </form>
+
+        {% if matched_video %}
+        <div class="result">
+            <h2>Matched sign video</h2>
+            <p>{{ matched_label }}</p>
+            <video controls>
+                <source src="/videos/{{ matched_video }}" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
