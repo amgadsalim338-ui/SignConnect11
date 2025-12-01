@@ -58,7 +58,7 @@ def save_index(index: faiss.Index, labels: List[str], output_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Build FAISS index for text labels")
     parser.add_argument("--model_dir", default="outputs/model", help="Trained model directory")
-    parser.add_argument("--video_dir", default="videos", help="Directory with .mp4 files")
+    parser.add_argument("--video_dir", default="static/sign_videos", help="Directory with .mp4 files")
     parser.add_argument("--output_dir", default="outputs/index", help="Directory to save the FAISS index")
     args = parser.parse_args()
 
