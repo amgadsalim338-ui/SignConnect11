@@ -102,7 +102,16 @@ class ContrastiveAudioTextModel(nn.Module):
         model = cls(config)
         state = torch.load(os.path.join(model_dir, "model.pt"), map_location="cpu")
         model.load_state_dict(state)
-        model.audio_processor = Wav2Vec2Processor.from_pretrained(os.path.join(model_dir, "audio_processor"))
+        try:
+            model.audio_processor = Wav2Vec2Processor.from_pretrained(
+                os.path.join(model_dir, "audio_processor")
+            )
+        except OSError:
+            print("⚠️ audio_processor missing, reloading from base model")
+            model.audio_processor = Wav2Vec2Processor.from_pretrained(
+                model.config.audio_encoder_name
+            )
+
         model.text_tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_dir, "text_tokenizer"))
         model.eval()
         return model

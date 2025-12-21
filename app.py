@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, send_from_directory, flash, r
 from model import ContrastiveAudioTextModel
 
 BASE_DIR = Path(__file__).parent
-VIDEOS_DIR = BASE_DIR / "videos"
+VIDEOS_DIR = BASE_DIR / "static" / "sign_videos"
 UPLOAD_DIR = BASE_DIR / "uploads"
 MODEL_DIR = BASE_DIR / "outputs" / "model"
 INDEX_DIR = BASE_DIR / "outputs" / "index"
@@ -64,10 +64,14 @@ def upload_audio():
 
     embedding = compute_audio_embedding(save_path)
     faiss.normalize_L2(embedding)
-    scores, indices = index.search(embedding.astype(np.float32), k=1)
+    scores, indices = index.search(embedding.astype(np.float32), k=3) #changed k=1 to k=3
+
+    for score, idx in zip(scores[0], indices[0]):
+        print(labels[idx], score)
+
     best_idx = int(indices[0][0])
     matched_label = labels[best_idx]
-    video_filename = matched_label.replace(" ", "_") + ".mp4"
+    video_filename = matched_label.lower().replace(" ", "_") + ".mp4" # changed and added .lower()
 
     return render_template("index.html", matched_video=video_filename, matched_label=matched_label)
 
