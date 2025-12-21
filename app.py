@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, send_from_directory, flash, r
 from model import ContrastiveAudioTextModel
 
 BASE_DIR = Path(__file__).parent
-VIDEOS_DIR = BASE_DIR / "videos"
+VIDEOS_DIR = BASE_DIR / "static" / "sign_videos"
 UPLOAD_DIR = BASE_DIR / "uploads"
 MODEL_DIR = BASE_DIR / "outputs" / "model"
 INDEX_DIR = BASE_DIR / "outputs" / "index"
