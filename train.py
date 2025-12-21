@@ -141,7 +141,7 @@ def train(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train audio-text contrastive model")
-    parser.add_argument("--video_dir", default="videos", help="Path to directory containing .mp4 files")
+    parser.add_argument("--video_dir", default="static/sign_videos", help="Path to directory containing .mp4 files")
     parser.add_argument("--output_dir", default="outputs/model", help="Directory to save model and processors")
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=3)
