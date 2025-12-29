@@ -31,7 +31,7 @@ def load_index():
         labels = json.load(f)
     return index, labels
 
-
+print("Loading model from:", MODEL_DIR.resolve())
 model = ContrastiveAudioTextModel.from_pretrained(str(MODEL_DIR))
 index, labels = load_index()
 
@@ -55,6 +55,7 @@ def upload_audio():
         return redirect(url_for("index_page"))
 
     file = request.files["audio"]
+    print("Uploaded filename:", file.filename)
     if file.filename == "":
         flash("No file selected")
         return redirect(url_for("index_page"))
@@ -64,7 +65,7 @@ def upload_audio():
 
     embedding = compute_audio_embedding(save_path)
     faiss.normalize_L2(embedding)
-    scores, indices = index.search(embedding.astype(np.float32), k=3) #changed k=1 to k=3
+    scores, indices = index.search(embedding.astype(np.float32), k=8) #changed k=1 to k=3
 
     for score, idx in zip(scores[0], indices[0]):
         print(labels[idx], score)
