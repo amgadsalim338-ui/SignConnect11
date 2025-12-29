@@ -33,6 +33,7 @@ def load_index():
 
 print("Loading model from:", MODEL_DIR.resolve())
 model = ContrastiveAudioTextModel.from_pretrained(str(MODEL_DIR))
+model.eval()
 index, labels = load_index()
 
 def compute_audio_embedding(audio_path: Path) -> np.ndarray:

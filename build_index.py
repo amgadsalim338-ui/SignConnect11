@@ -64,6 +64,7 @@ def main():
 
     labels = discover_labels(Path(args.video_dir))
     model = ContrastiveAudioTextModel.from_pretrained(args.model_dir)
+    model.eval()
     embeddings = embed_labels(labels, model)
     index = build_faiss_index(embeddings)
     save_index(index, labels, Path(args.output_dir))
