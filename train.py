@@ -99,7 +99,7 @@ def prepare_multi_audio_samples(labels: List[str], audio_root: Path) -> List[Tup
     missing = []
 
     for label in labels:
-        folder_name = label.replace(" ", "_")
+        folder_name = label.lower().replace(" ", "_")
         label_dir = audio_root / folder_name
 
         if not label_dir.exists() or not label_dir.is_dir():
