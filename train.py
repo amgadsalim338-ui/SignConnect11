@@ -1,7 +1,7 @@
 import argparse
 import random
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import librosa
 import numpy as np
@@ -11,38 +11,48 @@ from tqdm import tqdm
 
 from model import ContrastiveAudioTextModel
 
-# This version trains on REAL audio files in data/audios (wav or mp3),
-# matched by filename to videos in static/sign_videos.
-# Example:
-#   static/sign_videos/hello_how_are_you.mp4
-#   data/audios/hello_how_are_you.wav
+# This version trains on REAL audio files stored in per-label folders:
+#
+# data/audios/
+#   excuse_me/
+#     EX.wav
+#     EX2.wav
+#     excuse_me.wav
+#   thats_a_cool_outfit/
+#     TACO.wav
+#     thats_a_cool_outfit.mp3
+#
+# Labels are discovered from videos in static/sign_videos:
+#   static/sign_videos/excuse_me.mp4  -> label "excuse me"
+#
+# Each audio file inside data/audios/<label_folder>/ becomes a training example for that label.
 
 
-class AudioDataset(Dataset):
+AUDIO_EXTS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}
+
+
+class MultiAudioDataset(Dataset):
     def __init__(
         self,
-        labels: List[str],
-        audio_paths: List[Path],
+        samples: List[Tuple[str, Path]],
         model: ContrastiveAudioTextModel,
         sample_rate: int = 16000,
     ):
-        self.labels = labels
-        self.audio_paths = audio_paths
+        self.samples = samples
         self.model = model
         self.sample_rate = sample_rate
 
     def __len__(self):
-        return len(self.labels)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        label = self.labels[idx]
-        audio_path = self.audio_paths[idx]
+        label, audio_path = self.samples[idx]
         audio, _ = librosa.load(audio_path, sr=self.sample_rate)
 
         # Safety: remove NaNs/Infs and keep audio in float32
         audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-        # Optional safety: normalize to avoid extreme amplitudes
+        # Normalize to avoid extreme amplitudes
         max_abs = float(np.max(np.abs(audio)) + 1e-9)
         audio = audio / max_abs
 
@@ -76,25 +86,43 @@ def discover_labels(video_dir: Path) -> List[str]:
     return sorted(labels)
 
 
-def prepare_real_audio(labels: List[str], audio_dir: Path) -> List[Path]:
-    if not audio_dir.exists():
-        raise FileNotFoundError(f"Audio directory {audio_dir} not found")
+def prepare_multi_audio_samples(labels: List[str], audio_root: Path) -> List[Tuple[str, Path]]:
+    """
+    For each label (e.g. "excuse me"), expect a folder:
+      audio_root / "excuse_me" / *.wav|*.mp3|...
+    Collect (label, path) for every audio file inside.
+    """
+    if not audio_root.exists():
+        raise FileNotFoundError(f"Audio root directory {audio_root} not found")
 
-    audio_paths: List[Path] = []
+    samples: List[Tuple[str, Path]] = []
+    missing = []
+
     for label in labels:
-        safe_name = label.replace(" ", "_")
-        wav_path = audio_dir / f"{safe_name}.wav"
-        mp3_path = audio_dir / f"{safe_name}.mp3"
+        folder_name = label.replace(" ", "_")
+        label_dir = audio_root / folder_name
 
-        if wav_path.exists():
-            audio_paths.append(wav_path)
-        elif mp3_path.exists():
-            audio_paths.append(mp3_path)
-        else:
-            raise FileNotFoundError(
-                f"Missing audio for label '{label}'. Expected {wav_path} or {mp3_path}"
-            )
-    return audio_paths
+        if not label_dir.exists() or not label_dir.is_dir():
+            missing.append(str(label_dir))
+            continue
+
+        files = [p for p in label_dir.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXTS]
+        if not files:
+            missing.append(str(label_dir))
+            continue
+
+        # Add all audio files for this label
+        for p in sorted(files):
+            samples.append((label, p))
+
+    if missing:
+        raise FileNotFoundError(
+            "Missing audio folder(s) or no audio files found for some labels.\n"
+            "Expected per-label folders like data/audios/excuse_me/ with audio files inside.\n"
+            "Missing/empty:\n  - " + "\n  - ".join(missing[:30]) + ("\n  ...(more)" if len(missing) > 30 else "")
+        )
+
+    return samples
 
 
 def train(args):
@@ -102,7 +130,7 @@ def train(args):
     torch.manual_seed(args.seed)
 
     video_dir = Path(args.video_dir)
-    audio_dir = Path(args.audio_dir)
+    audio_root = Path(args.audio_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -111,11 +139,26 @@ def train(args):
 
     model = ContrastiveAudioTextModel()
 
-    # Load real audio matching each label
-    audio_paths = prepare_real_audio(labels, audio_dir)
-    dataset = AudioDataset(labels, audio_paths, model, sample_rate=args.sample_rate)
+    # Collect ALL audio samples from per-label folders
+    samples = prepare_multi_audio_samples(labels, audio_root)
+
+    # Print per-label counts (helpful sanity check)
+    counts = {}
+    for lbl, _p in samples:
+        counts[lbl] = counts.get(lbl, 0) + 1
+    print("Audio samples per label:")
+    for lbl in labels:
+        print(f"  {lbl}: {counts.get(lbl, 0)}")
+
+    print(f"Total training samples: {len(samples)}")
+
+    dataset = MultiAudioDataset(samples, model, sample_rate=args.sample_rate)
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=dataset.collate_fn,
+        drop_last=False,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -143,14 +186,17 @@ def train(args):
             )
             loss = outputs["loss"]
 
-            # ✅ Safety guard 1: stop if training diverges
+            # Safety guard 1: stop if training diverges
             if torch.isnan(loss) or torch.isinf(loss):
-                raise RuntimeError("Loss became NaN/Inf. Training diverged. Lower the learning rate.")
+                raise RuntimeError(
+                    "Loss became NaN/Inf. Training diverged. "
+                    "Lower the learning rate and/or reduce epochs."
+                )
 
             optimizer.zero_grad()
             loss.backward()
 
-            # ✅ Safety guard 2: gradient clipping (prevents NaN explosions)
+            # Safety guard 2: gradient clipping (prevents NaN explosions)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
 
             optimizer.step()
@@ -165,7 +211,7 @@ def train(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train audio-text contrastive model (real audio)")
+    parser = argparse.ArgumentParser(description="Train audio-text contrastive model (multi-audio per label)")
     parser.add_argument(
         "--video_dir",
         default="static/sign_videos",
@@ -174,7 +220,7 @@ def parse_args():
     parser.add_argument(
         "--audio_dir",
         default="data/audios",
-        help="Directory containing audio files matching video names (wav or mp3)",
+        help="Audio ROOT directory containing per-label folders (e.g. data/audios/excuse_me/*.wav)",
     )
     parser.add_argument(
         "--output_dir",
@@ -183,10 +229,10 @@ def parse_args():
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=400)
-    parser.add_argument("--learning_rate", type=float, default=1e-5)  # safer default
+    parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--grad_clip", type=float, default=1.0)  # ✅ new: gradient clipping
+    parser.add_argument("--grad_clip", type=float, default=1.0)
     return parser.parse_args()
 
 
