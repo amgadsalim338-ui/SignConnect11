@@ -4,12 +4,12 @@ from pathlib import Path
 from typing import List
 
 import librosa
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from model import ContrastiveAudioTextModel
-
 
 # This version trains on REAL audio files in data/audios (wav or mp3),
 # matched by filename to videos in static/sign_videos.
@@ -38,6 +38,14 @@ class AudioDataset(Dataset):
         label = self.labels[idx]
         audio_path = self.audio_paths[idx]
         audio, _ = librosa.load(audio_path, sr=self.sample_rate)
+
+        # Safety: remove NaNs/Infs and keep audio in float32
+        audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+        # Optional safety: normalize to avoid extreme amplitudes
+        max_abs = float(np.max(np.abs(audio)) + 1e-9)
+        audio = audio / max_abs
+
         return {"label": label, "audio": audio}
 
     def collate_fn(self, batch):
@@ -135,11 +143,19 @@ def train(args):
             )
             loss = outputs["loss"]
 
+            # ✅ Safety guard 1: stop if training diverges
+            if torch.isnan(loss) or torch.isinf(loss):
+                raise RuntimeError("Loss became NaN/Inf. Training diverged. Lower the learning rate.")
+
             optimizer.zero_grad()
             loss.backward()
+
+            # ✅ Safety guard 2: gradient clipping (prevents NaN explosions)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
+
             optimizer.step()
 
-            epoch_loss += loss.item()
+            epoch_loss += float(loss.item())
             progress.set_postfix({"loss": float(loss.item())})
 
         print(f"Epoch {epoch+1} loss: {epoch_loss / max(1, len(dataloader)):.4f}")
@@ -167,9 +183,10 @@ def parse_args():
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=400)
-    parser.add_argument("--learning_rate", type=float, default=5e-5)
+    parser.add_argument("--learning_rate", type=float, default=1e-5)  # safer default
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--grad_clip", type=float, default=1.0)  # ✅ new: gradient clipping
     return parser.parse_args()
 
 

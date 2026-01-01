@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import faiss
@@ -31,17 +30,59 @@ def load_index():
         labels = json.load(f)
     return index, labels
 
+
 print("Loading model from:", MODEL_DIR.resolve())
-model = ContrastiveAudioTextModel.from_pretrained(str(MODEL_DIR))
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = ContrastiveAudioTextModel.from_pretrained(str(MODEL_DIR)).to(device)
 model.eval()
 index, labels = load_index()
 
+
 def compute_audio_embedding(audio_path: Path) -> np.ndarray:
+    # 1️⃣ Load audio
     waveform, _ = librosa.load(audio_path, sr=16000)
-    audio_inputs = model.audio_processor(waveform, sampling_rate=16000, return_tensors="pt", padding=True)
+
+    # 2️⃣ 🔧 FIX: remove NaNs / Infs
+    waveform = np.nan_to_num(
+        waveform, nan=0.0, posinf=0.0, neginf=0.0
+    )
+
+    # 3️⃣ 🔧 FIX: normalize amplitude (prevents numerical explosion)
+    max_abs = np.max(np.abs(waveform)) + 1e-9
+    waveform = waveform / max_abs
+
+    # 4️⃣ ensure correct dtype
+    waveform = waveform.astype(np.float32)
+
+    # 🔍 DEBUG (temporary)
+    print("waveform nan?:", np.isnan(waveform).any())
+    print("waveform min/max:", float(np.min(waveform)), float(np.max(waveform)))
+
+    # 5️⃣ Convert to model input
+    audio_inputs = model.audio_processor(
+        waveform,
+        sampling_rate=16000,
+        return_tensors="pt",
+        padding=True
+    )
+
+    device = next(model.parameters()).device
+    audio_inputs = {k: v.to(device) for k, v in audio_inputs.items()}
+
     with torch.no_grad():
-        embeddings = model.encode_audio(audio_inputs["input_values"], audio_inputs.get("attention_mask"))
-    return embeddings.cpu().numpy()
+        embeddings = model.encode_audio(
+            audio_inputs["input_values"],
+            audio_inputs.get("attention_mask"),
+        )
+
+    embedding_np = embeddings.detach().cpu().numpy()
+
+    # 🔍 DEBUG (temporary)
+    print("embedding shape:", embedding_np.shape)
+    print("embedding nan?:", np.isnan(embedding_np).any())
+
+    return embedding_np
+
 
 
 @app.route("/")
@@ -57,6 +98,7 @@ def upload_audio():
 
     file = request.files["audio"]
     print("Uploaded filename:", file.filename)
+
     if file.filename == "":
         flash("No file selected")
         return redirect(url_for("index_page"))
@@ -66,16 +108,32 @@ def upload_audio():
 
     embedding = compute_audio_embedding(save_path)
     faiss.normalize_L2(embedding)
-    scores, indices = index.search(embedding.astype(np.float32), k=8) #changed k=1 to k=3
 
+    # safe k
+    k = min(8, len(labels), index.ntotal)
+    scores, indices = index.search(embedding.astype(np.float32), k=k)
+
+    # Print top-k safely and collect valid results
+    valid_results = []
     for score, idx in zip(scores[0], indices[0]):
-        print(labels[idx], score)
+        if idx == -1:
+            continue
+        print(labels[idx], float(score))
+        valid_results.append((int(idx), float(score)))
 
-    best_idx = int(indices[0][0])
+    if not valid_results:
+        flash("No match found (index returned no valid results).")
+        return redirect(url_for("index_page"))
+
+    best_idx = valid_results[0][0]
     matched_label = labels[best_idx]
-    video_filename = matched_label.lower().replace(" ", "_") + ".mp4" # changed and added .lower()
+    video_filename = matched_label.lower().replace(" ", "_") + ".mp4"
 
-    return render_template("index.html", matched_video=video_filename, matched_label=matched_label)
+    return render_template(
+        "index.html",
+        matched_video=video_filename,
+        matched_label=matched_label,
+    )
 
 
 @app.route("/videos/<path:filename>")
